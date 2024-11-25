@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import gymnasium as gym
 import torch
+import numpy as np
 
 import omni.isaac.lab.sim as sim_utils
 from omni.isaac.lab.assets import Articulation
@@ -14,7 +15,15 @@ from omni.isaac.lab.envs import DirectRLEnv
 from omni.isaac.lab.sensors import ContactSensor, RayCaster
 
 from .anymal_c_env_cfg import AnymalCFlatEnvCfg, AnymalCRoughEnvCfg
+# visualize target
+from .targetVisualization import targetVisualization as targetVis
+# visualize taining
+import wandb
 
+my_config = {
+    "run_id": "Quadriped_tripod",
+    "epoch_num":2000,
+}
 
 class AnymalCEnv(DirectRLEnv):
     cfg: AnymalCFlatEnvCfg | AnymalCRoughEnvCfg
@@ -47,13 +56,19 @@ class AnymalCEnv(DirectRLEnv):
         self._undesired_contact_body_shank_ids, _ = self._contact_sensor.find_bodies(".*SHANK")
 
         # find the right front foot transform in world frame(e.g.)
-        self._RF_FOOT, _ = self._robot.find_bodies("LF_FOOT")
+        self._RF_FOOT, _ = self._robot.find_bodies("RF_FOOT")
         self._BASE, _ = self._robot.find_bodies("base")
         # init base frame origin (still confused about how to get this)
         # self.root_position = self._robot.data.default_root_state
         # self.root_position[:, :3] += self._terrain.env_origins
         self.root_position = self._robot.data.body_pos_w[:, self._BASE[0], :3]
- 
+
+        run = wandb.init(
+            project="RL_Final",
+            config=my_config,
+            id=my_config["run_id"]
+        )
+    
     def _setup_scene(self):
         self._robot = Articulation(self.cfg.robot)
         self.scene.articulations["robot"] = self._robot
@@ -168,7 +183,7 @@ class AnymalCEnv(DirectRLEnv):
         joint_accel = torch.sum(torch.square(self._robot.data.joint_acc), dim=1)
         # action rate(w5)
         action_rate = torch.sum(torch.square(self._actions - self._previous_actions), dim=1)
-        # nc - number of collisions(w6) todo
+        # nc - number of collisions(w6)
         net_contact_forces = self._contact_sensor.data.net_forces_w_history
         
         is_contact = (
@@ -182,7 +197,7 @@ class AnymalCEnv(DirectRLEnv):
         contacts = contacts_shank + contacts_thigh
         # print("contacts", contacts_shank, contacts_thigh)
 
-        # termination penalty(w7) todo
+        # termination penalty(w7)
         died = torch.any(torch.max(torch.norm(net_contact_forces[:, :, self._BASE], dim=-1), dim=1)[0] > 1.0, dim=1)
         # print("step", self.step_dt)
         rewards = {
@@ -193,6 +208,15 @@ class AnymalCEnv(DirectRLEnv):
         # Logging
         for key, value in rewards.items():
             self._episode_sums[key] += value
+
+        # wandb logging
+        # wandb.log(
+        #     {
+        #         "Re": rewards["Re"],
+        #         "Rn": rewards["Rn"],
+        #         "Deviation": foot_pos_deviation,
+        #     }
+        # ) 
         return reward
 
     def _get_dones(self) -> tuple[torch.Tensor, torch.Tensor]:
@@ -212,8 +236,16 @@ class AnymalCEnv(DirectRLEnv):
         self._actions[env_ids] = 0.0
         self._previous_actions[env_ids] = 0.0
         # Sample new commands
-        self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(0.3, 0.6)
-        # self._commands[env_ids] = torch.rand((1,3), device=self.device)
+        x = np.random.uniform(0.3, 0.6)
+        y = np.random.uniform(-0.3, 0.3)
+        # y = np.random.uniform(-0.6, -0.3)
+        z = np.random.uniform(-0.1, 0.4)
+        # self._commands[env_ids] = torch.zeros_like(self._commands[env_ids]).uniform_(0.3, 0.6)
+        self._commands[env_ids] = torch.tensor([x, y, z], device=self.device)
+        # target visualization
+        self.target = targetVis(self._commands[env_ids], self.root_position[env_ids],scale=0.03, num_envs=self.num_envs)
+        self.target.visualize()
+
         # Reset robot state
         joint_pos = self._robot.data.default_joint_pos[env_ids]
         joint_vel = self._robot.data.default_joint_vel[env_ids]
