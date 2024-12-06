@@ -21,6 +21,7 @@ from .targetVisualization import targetVisualization as targetVis
 import wandb
 
 ### add
+import pickle
 import os
 import cli_args
 from omni.isaac.lab_tasks.utils import get_checkpoint_path
@@ -183,7 +184,10 @@ class AnymalCEnv(DirectRLEnv):
 
     def _pre_physics_step(self, actions: torch.Tensor):
         action_index = actions.item() # to get the action that this high level policy want to take
-        obs, extras = self.env.get_observations()
+        # obs, extras = self.env.get_observations()
+        obs_path = "/home/hyc/IsaacLab/saved_obs/env_state.pkl"
+        with open(obs_path, 'rb') as f:
+            obs = pickle.load(f)
         low_level_action = self.low_level_policies[action_index](obs) # how to setup discrete action (might be direct_rl_env?)
         self._actions = low_level_action.clone()
         self._processed_actions = self.cfg.action_scale * self._actions + self._robot.data.default_joint_pos
